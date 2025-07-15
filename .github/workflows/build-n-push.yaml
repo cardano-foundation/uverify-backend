@@ -1,0 +1,58 @@
+name: build-n-push
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+*'
+  pull_request:
+    types: [ opened, synchronize ]
+  workflow_dispatch:
+
+env:
+  DOCKER_PUSH: true
+
+jobs:
+  publish:
+    permissions:
+      contents: write
+      packages: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔌 Setup JDK 21
+        uses: actions/setup-java@v3
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: 🔍 Extract POM Version
+        run: |
+          VERSION=$(./mvnw --batch-mode -q -Dexec.executable=echo -Dexec.args='${project.version}' --non-recursive exec:exec)
+          echo "POM_VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: 🔨 Build Docker Image
+        run: |
+          ./mvnw --batch-mode clean package -DskipTests
+          echo "Building Docker image for version ${{ env.POM_VERSION }}"
+
+      - name: ⛮ cf-gha-baseline
+        uses: cardano-foundation/cf-gha-workflows/./actions/cf-gha-baseline@main
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRIVATE_DOCKER_REGISTRY_URL: ${{ secrets.GITLAB_DOCKER_REGISTRY_URL }}
+          PRIVATE_DOCKER_REGISTRY_USER: Deploy-Token
+          PRIVATE_DOCKER_REGISTRY_PASS: ${{ secrets.GITLAB_PKG_REGISTRY_TOKEN }}
+          HUB_DOCKER_COM_USER: ${{ secrets.HUB_DOCKER_COM_USER }}
+          HUB_DOCKER_COM_PASS: ${{ secrets.HUB_DOCKER_COM_PASS }}
+          DOCKER_REGISTRIES: "${{ secrets.DOCKER_REGISTRIES }}"
+
+      - name:  🌍 earthly (docker build and push)
+        run: |
+          earthly +docker-publish \
+            --PUSH=${DOCKER_PUSH} \
+            --DOCKER_REGISTRIES="${{ secrets.DOCKER_REGISTRIES }}" \
+            --DOCKER_IMAGES_EXTRA_TAGS="${EARTHLY_DOCKER_IMAGES_EXTRA_TAGS}"
